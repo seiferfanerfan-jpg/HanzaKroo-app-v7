@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "هنذاكروا",
+    "slug": "hanzakro",
+    "scheme": "hanzakro",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "experiments": {
+      "typedRoutes": true
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.hanzakro.study"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/icon.png"
+      },
+      "package": "com.hanzakro.study",
+      "versionCode": 1,
+      "predictiveBackGestureEnabled": true
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "welcome",
+          "color": "#1479F8"
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "يستخدم هنذاكروا الميكروفون للتعرف على كلامك عند بدء التسجيل.",
+          "speechRecognitionPermission": "يستخدم هنذاكروا خدمة التعرف على الكلام فقط بعد موافقتك.",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
+        }
+      ],
+      "expo-screen-orientation",
+      "expo-router"
+    ]
+  }
+}
