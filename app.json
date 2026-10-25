@@ -12,7 +12,11 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hanzakro.study"
+      "bundleIdentifier": "com.hanzakro.study",
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "يستخدم هنذاكروا خدمة التعرف على الكلام فقط بعد موافقتك.",
+        "NSMicrophoneUsageDescription": "يستخدم هنذاكروا الميكروفون للتعرف على كلامك عند بدء التسجيل."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -21,7 +25,10 @@
       },
       "package": "com.hanzakro.study",
       "versionCode": 1,
-      "predictiveBackGestureEnabled": true
+      "predictiveBackGestureEnabled": true,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -46,6 +53,16 @@
       ],
       "expo-screen-orientation",
       "expo-router"
-    ]
+    ],
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "a9a27a43-c286-489c-828c-fbc68dda272f"
+      }
+    }
   }
 }

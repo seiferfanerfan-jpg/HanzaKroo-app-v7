@@ -3,6 +3,10 @@
 # dependencies
 node_modules/
 
+# This repository uses pnpm; ignore stale npm lockfiles created locally
+package-lock.json
+npm-shrinkwrap.json
+
 # Expo
 .expo/
 dist/
