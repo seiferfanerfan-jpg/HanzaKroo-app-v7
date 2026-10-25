@@ -23,6 +23,20 @@ pnpm test:core
 
 يحتوي `eas.json` على ملفي بناء Android: ملف `preview` ينتج APK للتجربة، وملف `production` ينتج AAB. بعد تسجيل الدخول إلى حساب Expo وضبط بيانات التوقيع، نفّذ `pnpm dlx eas-cli@latest build -p android --profile preview` أو `pnpm dlx eas-cli@latest build -p android --profile production`. لا يحتوي المستودع على مفاتيح توقيع أو أسرار. لم يُنفذ البناء النهائي أو التوقيع تلقائيًا.
 
+## إعداد EAS وإنشاء APK
+
+يحتوي profile باسم `apk` على `distribution: internal` و`android.buildType: apk`. بعد تسجيل الدخول إلى Expo من جهازك، نفّذ مرة واحدة من جذر المشروع:
+
+```bash
+pnpm dlx eas-cli@latest login
+pnpm run eas:configure
+pnpm run eas:build:apk
+```
+
+سيضيف أمر التهيئة `projectId` الخاص بحساب Expo إلى إعدادات التطبيق، وقد يطلب من EAS إنشاء Android keystore. لا تُدخل أسرار التوقيع إلى Git.
+
+يوجد أيضًا سير عمل يدوي في `.github/workflows/build-apk.yml`. لإطلاقه من GitHub، أضف Personal Access Token من Expo باسم السر `EXPO_TOKEN` إلى إعدادات المستودع، ثم شغّل **Actions → Build Android APK → Run workflow** واختر profile `apk`. يتطلب التشغيل الأول تهيئة `projectId` وبيانات التوقيع من حساب Expo؛ لا يبدأ سير العمل بدون `EXPO_TOKEN`.
+
 ## الخصائص والحالة
 
 يدعم الإصدار الحالي إعداد رابط HTTPS واختياره، واختيار الهوية، وعرض الدعاء قبل المنصة، وحفظ التفضيلات، وشاشة إعدادات، وإشعار ترحيب محلي بعد طلب الإذن، وWebView مع تحميل وأخطاء وتنقل رجوع وأدوات تحكم. أضيف جسر Web Speech محدود للمضيف الذي حفظه المستخدم لتحويل النص إلى كلام والتعرف على الكلام، على أن تختبر الوظائف على development build وجهاز Android حقيقي.
