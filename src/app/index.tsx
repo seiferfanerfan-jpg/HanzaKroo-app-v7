@@ -3,6 +3,7 @@ import { ActivityIndicator, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
 import { useAppState } from '../lib/appState';
+import { getStartupRoute } from '../lib/startupRoute';
 
 export default function IndexRoute() {
   const router = useRouter();
@@ -10,10 +11,8 @@ export default function IndexRoute() {
 
   useEffect(() => {
     if (!ready) return;
-    if (!prefs.platformUrl) router.replace('/setup');
-    else if (!prefs.identity) router.replace('/identity');
-    else router.replace('/prayer');
-  }, [ready, prefs.platformUrl, prefs.identity, router]);
+    router.replace(getStartupRoute(prefs));
+  }, [ready, prefs, router]);
 
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, backgroundColor: '#F7FAFF' }}>

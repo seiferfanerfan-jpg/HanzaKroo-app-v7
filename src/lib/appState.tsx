@@ -3,6 +3,7 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert } from 'react-native';
 import { DEFAULT_PREFERENCES, loadPreferences, savePreferences, type Preferences } from './storage';
+import { createPreferencesController } from './preferencesController';
 import { postWelcomeOnce } from './welcomeNotification';
 
 type AppStateValue = {
@@ -25,6 +26,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [activeUrl, setActiveUrl] = useState<string | null>(null);
   const [rollbackUrl, setRollbackUrl] = useState<string | null>(null);
   const notificationStarted = useRef(false);
+  const preferencesController = useRef(createPreferencesController(DEFAULT_PREFERENCES, savePreferences));
 
   const refreshNotificationStatus = useCallback(async () => {
     try {
@@ -48,12 +50,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     loadPreferences().then((loaded) => {
       if (!active) return;
       setPrefs(loaded);
+      preferencesController.current.hydrate(loaded);
       setActiveUrl(loaded.platformUrl || null);
       setReady(true);
       void refreshNotificationStatus();
       if (loaded.welcomeNotifications) void postWelcome();
     }).catch(() => {
       if (!active) return;
+      preferencesController.current.hydrate(DEFAULT_PREFERENCES);
       setPrefs(DEFAULT_PREFERENCES);
       setActiveUrl(null);
       setReady(true);
@@ -64,11 +68,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const patchPrefs = useCallback(async (next: Preferences) => {
     const enablingWelcome = next.welcomeNotifications && !prefs.welcomeNotifications;
-    setPrefs(next);
-    try {
-      await savePreferences(next);
+    const result = await preferencesController.current.patch(next);
+    setPrefs(result.current);
+    if (result.ok) {
       if (enablingWelcome) void postWelcome();
-    } catch {
+      return;
+    }
+    {
       Alert.alert('تعذر الحفظ', 'لم نتمكن من حفظ الإعدادات على هذا الجهاز. حاول مرة أخرى.');
     }
   }, [prefs, postWelcome]);

@@ -19,7 +19,23 @@ export function normalizePlatformUrl(input: string): { value?: string; error?: s
 }
 
 export function isWebScheme(url: string): boolean {
-  return url === 'about:blank' || url.startsWith('https://');
+  if (url === 'about:blank') return true;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password && !!parsed.hostname;
+  } catch {
+    return false;
+  }
+}
+
+export function originOf(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || !parsed.hostname) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
 }
 
 export function hostOf(url: string): string | null {

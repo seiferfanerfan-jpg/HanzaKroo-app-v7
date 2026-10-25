@@ -6,28 +6,27 @@ import {
   scheduleNotificationAsync,
   setNotificationChannelAsync,
 } from 'expo-notifications';
+import { createWelcomePoster, type WelcomeResult } from './welcomeNotificationCore';
 
-let postedThisRun = false;
-
-export async function postWelcomeOnce(): Promise<'posted' | 'denied' | 'unsupported' | 'already-posted'> {
-  if (postedThisRun) return 'already-posted';
-  if (Platform.OS !== 'android' && Platform.OS !== 'ios') return 'unsupported';
-
-  try {
-    if (Platform.OS === 'android') {
-      await setNotificationChannelAsync('welcome', {
-        name: 'ترحيب هنذاكروا',
-        importance: AndroidImportance.DEFAULT,
-        vibrationPattern: [0, 180, 90, 180],
-        lightColor: '#1479F8',
-      });
-    }
-    let permission = await getPermissionsAsync();
-    if (!permission.granted && permission.status === 'undetermined') {
-      permission = await requestPermissionsAsync();
-    }
-    if (!permission.granted) return 'denied';
-
+const postWelcome = createWelcomePoster({
+  platform: Platform.OS,
+  ensureChannel: async () => {
+    await setNotificationChannelAsync('welcome', {
+      name: 'ترحيب هنذاكروا',
+      importance: AndroidImportance.DEFAULT,
+      vibrationPattern: [0, 180, 90, 180],
+      lightColor: '#1479F8',
+    });
+  },
+  getPermission: async () => {
+    const permission = await getPermissionsAsync();
+    return { granted: permission.granted, status: permission.status };
+  },
+  requestPermission: async () => {
+    const permission = await requestPermissionsAsync();
+    return { granted: permission.granted, status: permission.status };
+  },
+  schedule: async () => {
     await scheduleNotificationAsync({
       content: {
         title: 'هنذاكروا',
@@ -37,9 +36,9 @@ export async function postWelcomeOnce(): Promise<'posted' | 'denied' | 'unsuppor
       },
       trigger: null,
     });
-    postedThisRun = true;
-    return 'posted';
-  } catch {
-    return 'denied';
-  }
+  },
+});
+
+export async function postWelcomeOnce(): Promise<WelcomeResult> {
+  return postWelcome();
 }

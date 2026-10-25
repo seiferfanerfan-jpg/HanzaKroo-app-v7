@@ -37,6 +37,7 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+.test-dist/
 
 # generated native folders
 /ios

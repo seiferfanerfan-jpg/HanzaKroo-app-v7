@@ -1,8 +1,8 @@
 export function createSpeechBridge(trustedHost: string): string {
-  const host = JSON.stringify(trustedHost.toLowerCase());
+  const origin = JSON.stringify(trustedHost.toLowerCase());
   return `(function(){
     try {
-      if (location.hostname.toLowerCase() !== ${host} || !window.ReactNativeWebView) return true;
+      if (location.origin.toLowerCase() !== ${origin} || !window.ReactNativeWebView) return true;
       var send = function(payload){ window.ReactNativeWebView.postMessage(JSON.stringify(payload)); };
       var listeners = {};
       var dispatch = function(type, detail){
@@ -32,6 +32,7 @@ export function createSpeechBridge(trustedHost: string): string {
         if (payload.kind === 'recognition') {
           var rec = window.__hanzakroRecognition;
           if (!rec) return;
+          if (payload.sessionId && payload.sessionId !== rec._sessionId) return;
           var evt = new Event(payload.name || 'error');
           if (payload.name === 'result') {
             var item = { transcript: payload.transcript || '', confidence: payload.confidence || 0 };
@@ -41,6 +42,7 @@ export function createSpeechBridge(trustedHost: string): string {
           if (payload.name === 'error') { evt.error = payload.error || 'service-not-allowed'; evt.message = payload.message || ''; }
           try { if (typeof rec['on' + evt.type] === 'function') rec['on' + evt.type](evt); } catch(e){}
           try { rec.dispatchEvent(evt); } catch(e){}
+          if (payload.name === 'end' || payload.name === 'error') rec._sessionId = null;
         }
       };
       if (!window.SpeechSynthesisUtterance || !window.speechSynthesis || typeof window.speechSynthesis.speak !== 'function') {
@@ -63,13 +65,13 @@ export function createSpeechBridge(trustedHost: string): string {
         send({type:'tts_get_voices'});
       }
       if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
-        var Recognition = function(){ this.lang='en-US'; this.continuous=false; this.interimResults=false; this.maxAlternatives=1; this.onstart=this.onend=this.onerror=this.onresult=null; this._listeners={}; };
+        var Recognition = function(){ this.lang='en-US'; this.continuous=false; this.interimResults=false; this.maxAlternatives=1; this.onstart=this.onend=this.onerror=this.onresult=null; this._listeners={}; this._sessionId=null; };
         Recognition.prototype.addEventListener=function(t,f){ this._listeners[t]=this._listeners[t]||[]; this._listeners[t].push(f); };
         Recognition.prototype.removeEventListener=function(t,f){ this._listeners[t]=(this._listeners[t]||[]).filter(function(x){return x!==f;}); };
         Recognition.prototype.dispatchEvent=function(e){ (this._listeners[e.type]||[]).forEach(function(f){try{f(e)}catch(x){}}); };
-        Recognition.prototype.start=function(){ window.__hanzakroRecognition=this; send({type:'recognition_start',lang:this.lang,continuous:this.continuous,interimResults:this.interimResults,maxAlternatives:this.maxAlternatives}); };
-        Recognition.prototype.stop=function(){ send({type:'recognition_stop'}); };
-        Recognition.prototype.abort=function(){ send({type:'recognition_abort'}); };
+        Recognition.prototype.start=function(){ if (window.__hanzakroRecognition && window.__hanzakroRecognition._sessionId) throw new Error('already active'); this._sessionId=String(Date.now())+Math.random().toString(16).slice(2); window.__hanzakroRecognition=this; send({type:'recognition_start',sessionId:this._sessionId,lang:this.lang,continuous:this.continuous,interimResults:this.interimResults,maxAlternatives:this.maxAlternatives}); };
+        Recognition.prototype.stop=function(){ if (this._sessionId) send({type:'recognition_stop',sessionId:this._sessionId}); };
+        Recognition.prototype.abort=function(){ if (this._sessionId) send({type:'recognition_abort',sessionId:this._sessionId}); };
         window.SpeechRecognition=Recognition; window.webkitSpeechRecognition=Recognition;
       }
       document.addEventListener('fullscreenchange', function(){ send({type:'fullscreen',active:!!document.fullscreenElement}); });

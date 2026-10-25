@@ -34,7 +34,8 @@
     "android": "expo run:android",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
-    "check:expo": "expo-doctor"
+    "check:expo": "expo-doctor",
+    "test:core": "rm -rf .test-dist && tsc -p tsconfig.test.json && node --test tests/core.test.cjs"
   },
   "private": true
 }

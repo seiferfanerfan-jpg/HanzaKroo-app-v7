@@ -24,7 +24,7 @@ import {
 import { WebView as RawWebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import type { WebViewErrorEvent, WebViewHttpErrorEvent, WebViewOpenWindowEvent } from 'react-native-webview/lib/WebViewTypes';
 import { PRAYERS } from './src/data/prayers';
-import { hostOf, isWebScheme, normalizePlatformUrl } from './src/lib/url';
+import { isWebScheme, normalizePlatformUrl, originOf } from './src/lib/url';
 import { useAppState } from './src/lib/appState';
 import type { Preferences } from './src/lib/storage';
 import { createSpeechBridge } from './src/lib/webSpeechBridge';
@@ -79,7 +79,7 @@ export function AppScreen({ screen }: { screen: Screen }) {
   const [micStatus, setMicStatus] = useState('لم يُطلب الإذن بعد');
   const [recognitionStatus, setRecognitionStatus] = useState('يُفحص عند بدء التسجيل');
   const webRef = useRef<any>(null);
-  const host = useMemo(() => hostOf(activeUrl || prefs.platformUrl || '') || '', [activeUrl, prefs.platformUrl]);
+  const trustedOrigin = useMemo(() => originOf(activeUrl || prefs.platformUrl || '') || '', [activeUrl, prefs.platformUrl]);
   const prayer = prefs.identity ? PRAYERS[prefs.identity] : null;
 
   useEffect(() => {
@@ -212,8 +212,8 @@ export function AppScreen({ screen }: { screen: Screen }) {
   };
 
   const onWebMessage = async (event: WebViewMessageEvent) => {
-    const sourceHost = hostOf(event.nativeEvent.url || currentWebUrl);
-    if (!sourceHost || sourceHost !== host) return;
+    const sourceOrigin = originOf(event.nativeEvent.url || currentWebUrl);
+    if (!sourceOrigin || sourceOrigin !== trustedOrigin) return;
     let message: BridgeMessage;
     try { message = JSON.parse(event.nativeEvent.data) as BridgeMessage; } catch { return; }
     switch (message.type) {
@@ -398,7 +398,7 @@ export function AppScreen({ screen }: { screen: Screen }) {
     );
   }
 
-  const trustedHost = hostOf(currentWebUrl) === host;
+  const trustedPage = originOf(currentWebUrl) === trustedOrigin;
   if (!prefs.platformUrl || !webSourceUrl) return <View style={styles.loadingScreen}><StatusBar style="dark" /><ActivityIndicator size="large" color={BLUE} /><Text style={styles.body}>بنجهّز المنصة…</Text></View>;
   return (
     <View style={styles.webPage}>
@@ -426,7 +426,7 @@ export function AppScreen({ screen }: { screen: Screen }) {
           setSupportMultipleWindows={false}
           mixedContentMode="never"
           originWhitelist={['https://*', 'about:blank']}
-          injectedJavaScriptBeforeContentLoaded={trustedHost ? createSpeechBridge(host) : 'true;'}
+          injectedJavaScriptBeforeContentLoaded={trustedPage ? createSpeechBridge(trustedOrigin) : 'true;'}
           onShouldStartLoadWithRequest={(request: WebViewNavigation) => request.url === 'about:blank' || isWebScheme(request.url)}
           onNavigationStateChange={(state: WebViewNavigation) => { setCanGoBack(state.canGoBack); setCurrentWebUrl(state.url || currentWebUrl); }}
           onLoadStart={() => { setWebLoading(true); setWebError(''); }}
