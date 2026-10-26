@@ -6,26 +6,23 @@ import {
   scheduleNotificationAsync,
   setNotificationChannelAsync,
 } from 'expo-notifications';
-import { createWelcomePoster, type WelcomeResult } from './welcomeNotificationCore';
+import { createWelcomePoster } from './welcomeNotificationCore';
 
-const postWelcome = createWelcomePoster({
+const ensureWelcomeChannel = async () => {
+  if (Platform.OS !== 'android') return;
+  await setNotificationChannelAsync('welcome', {
+    name: 'ترحيب هنذاكروا',
+    importance: AndroidImportance.DEFAULT,
+    vibrationPattern: [0, 180, 90, 180],
+    lightColor: '#1479F8',
+  });
+};
+
+export const postWelcomeOnce = createWelcomePoster({
   platform: Platform.OS,
-  ensureChannel: async () => {
-    await setNotificationChannelAsync('welcome', {
-      name: 'ترحيب هنذاكروا',
-      importance: AndroidImportance.DEFAULT,
-      vibrationPattern: [0, 180, 90, 180],
-      lightColor: '#1479F8',
-    });
-  },
-  getPermission: async () => {
-    const permission = await getPermissionsAsync();
-    return { granted: permission.granted, status: permission.status };
-  },
-  requestPermission: async () => {
-    const permission = await requestPermissionsAsync();
-    return { granted: permission.granted, status: permission.status };
-  },
+  ensureChannel: ensureWelcomeChannel,
+  getPermission: getPermissionsAsync,
+  requestPermission: requestPermissionsAsync,
   schedule: async () => {
     await scheduleNotificationAsync({
       content: {
@@ -38,7 +35,3 @@ const postWelcome = createWelcomePoster({
     });
   },
 });
-
-export async function postWelcomeOnce(): Promise<WelcomeResult> {
-  return postWelcome();
-}

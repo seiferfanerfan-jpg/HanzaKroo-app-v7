@@ -8,11 +8,12 @@ import { getStartupRoute } from '../lib/startupRoute';
 export default function IndexRoute() {
   const router = useRouter();
   const { ready, prefs } = useAppState();
+  const startupRoute = getStartupRoute(prefs);
 
   useEffect(() => {
     if (!ready) return;
-    router.replace(getStartupRoute(prefs));
-  }, [ready, prefs, router]);
+    router.replace(startupRoute);
+  }, [ready, startupRoute, router]);
 
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, backgroundColor: '#F7FAFF' }}>

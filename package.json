@@ -36,6 +36,7 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "check:expo": "expo-doctor",
+    "test": "pnpm run test:core",
     "eas:whoami": "pnpm dlx eas-cli@latest whoami",
     "eas:configure": "pnpm dlx eas-cli@latest project:init",
     "eas:build:apk": "pnpm dlx eas-cli@latest build --platform android --profile apk",

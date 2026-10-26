@@ -30,8 +30,10 @@ function boundedNumber(value: unknown, fallback: number, min: number, max: numbe
 
 export function normalizePreferences(value: unknown): Preferences {
   if (!isRecord(value)) throw new Error('بيانات التفضيلات المخزنة ليست كائنًا صالحًا.');
+
   const url = typeof value.platformUrl === 'string' ? normalizePlatformUrl(value.platformUrl).value || null : null;
   const identity: Identity | null = value.identity === 'saif' || value.identity === 'hanoun' ? value.identity : null;
+
   return {
     platformUrl: url,
     identity,

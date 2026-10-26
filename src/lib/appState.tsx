@@ -2,14 +2,16 @@ import * as Notifications from 'expo-notifications';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert } from 'react-native';
-import { DEFAULT_PREFERENCES, loadPreferences, savePreferences, type Preferences } from './storage';
+import { DEFAULT_PREFERENCES, type Preferences } from './preferencesModel';
 import { createPreferencesController } from './preferencesController';
+import { isWelcomeEligible } from './welcomeNotificationCore';
+import { loadPreferences, savePreferences } from './storage';
 import { postWelcomeOnce } from './welcomeNotification';
 
 type AppStateValue = {
   ready: boolean;
   prefs: Preferences;
-  patchPrefs: (next: Preferences) => Promise<void>;
+  patchPrefs: (patch: Partial<Preferences>) => Promise<boolean>;
   notificationStatus: string;
   activeUrl: string | null;
   setActiveUrl: (url: string | null) => void;
@@ -19,6 +21,8 @@ type AppStateValue = {
 
 const AppStateContext = createContext<AppStateValue | null>(null);
 
+type PreferencesController = ReturnType<typeof createPreferencesController>;
+
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [prefs, setPrefs] = useState(DEFAULT_PREFERENCES);
@@ -26,7 +30,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [activeUrl, setActiveUrl] = useState<string | null>(null);
   const [rollbackUrl, setRollbackUrl] = useState<string | null>(null);
   const notificationStarted = useRef(false);
-  const preferencesController = useRef(createPreferencesController(DEFAULT_PREFERENCES, savePreferences));
+  const welcomeEnabledRef = useRef(false);
+  const setupCompleteRef = useRef(false);
+  const preferencesControllerRef = useRef<PreferencesController | null>(null);
+  if (preferencesControllerRef.current === null) {
+    preferencesControllerRef.current = createPreferencesController(DEFAULT_PREFERENCES, savePreferences);
+  }
 
   const refreshNotificationStatus = useCallback(async () => {
     try {
@@ -40,8 +49,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const postWelcome = useCallback(async () => {
     if (notificationStarted.current) return;
     notificationStarted.current = true;
-    await postWelcomeOnce();
+    const result = await postWelcomeOnce();
     await refreshNotificationStatus();
+    if (result === 'error') setNotificationStatus('تعذر جدولة إشعار الترحيب؛ راجع إعدادات الجهاز وحاول لاحقًا.');
+    if (result !== 'posted' && result !== 'already-posted') notificationStarted.current = false;
   }, [refreshNotificationStatus]);
 
   useEffect(() => {
@@ -49,35 +60,47 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => undefined);
     loadPreferences().then((loaded) => {
       if (!active) return;
+      preferencesControllerRef.current?.hydrate(loaded);
+      welcomeEnabledRef.current = loaded.welcomeNotifications;
+      setupCompleteRef.current = Boolean(loaded.platformUrl && loaded.identity);
       setPrefs(loaded);
-      preferencesController.current.hydrate(loaded);
       setActiveUrl(loaded.platformUrl || null);
       setReady(true);
       void refreshNotificationStatus();
-      if (loaded.welcomeNotifications) void postWelcome();
+      if (isWelcomeEligible(loaded)) void postWelcome();
     }).catch(() => {
       if (!active) return;
-      preferencesController.current.hydrate(DEFAULT_PREFERENCES);
+      preferencesControllerRef.current?.hydrate(DEFAULT_PREFERENCES);
+      welcomeEnabledRef.current = false;
+      setupCompleteRef.current = false;
       setPrefs(DEFAULT_PREFERENCES);
       setActiveUrl(null);
       setReady(true);
+      Alert.alert('تعذر قراءة الإعدادات', 'لم نتمكن من قراءة بيانات التطبيق على هذا الجهاز. يمكنك المتابعة، لكن احفظ الرابط والتفضيلات مجددًا بعد فحص مساحة التخزين.');
       void refreshNotificationStatus();
     });
     return () => { active = false; };
   }, [postWelcome, refreshNotificationStatus]);
 
-  const patchPrefs = useCallback(async (next: Preferences) => {
-    const enablingWelcome = next.welcomeNotifications && !prefs.welcomeNotifications;
-    const result = await preferencesController.current.patch(next);
+  const patchPrefs = useCallback(async (patch: Partial<Preferences>): Promise<boolean> => {
+    const result = await preferencesControllerRef.current!.patch(patch);
     setPrefs(result.current);
-    if (result.ok) {
-      if (enablingWelcome) void postWelcome();
-      return;
+    if (!result.ok) {
+      Alert.alert('تعذر الحفظ', 'لم نتمكن من حفظ الإعدادات على هذا الجهاز. أعد المحاولة؛ لم يُعتمد التغيير غير المحفوظ.');
+      return false;
     }
-    {
-      Alert.alert('تعذر الحفظ', 'لم نتمكن من حفظ الإعدادات على هذا الجهاز. حاول مرة أخرى.');
+
+    const wasWelcomeEnabled = welcomeEnabledRef.current;
+    const wasSetupComplete = setupCompleteRef.current;
+    welcomeEnabledRef.current = result.current.welcomeNotifications;
+    setupCompleteRef.current = Boolean(result.current.platformUrl && result.current.identity);
+    const newlyConfigured = !wasSetupComplete && setupCompleteRef.current;
+    const newlyEnabled = !wasWelcomeEnabled && result.current.welcomeNotifications;
+    if (isWelcomeEligible(result.current) && (newlyConfigured || newlyEnabled)) {
+      void postWelcome();
     }
-  }, [prefs, postWelcome]);
+    return true;
+  }, [postWelcome]);
 
   return (
     <AppStateContext.Provider value={{ ready, prefs, patchPrefs, notificationStatus, activeUrl, setActiveUrl, rollbackUrl, setRollbackUrl }}>

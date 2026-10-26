@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type Ref } from 'react';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Speech from 'expo-speech';
@@ -8,6 +8,7 @@ import * as Notifications from 'expo-notifications';
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   BackHandler,
   Image,
   KeyboardAvoidingView,
@@ -21,12 +22,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { WebView as RawWebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
-import type { WebViewErrorEvent, WebViewHttpErrorEvent, WebViewOpenWindowEvent } from 'react-native-webview/lib/WebViewTypes';
-import { PRAYERS } from './src/data/prayers';
+import { WebView as RawWebView } from 'react-native-webview';
+import type { WebViewProps } from 'react-native-webview/lib/WebView';
+import type { WebViewErrorEvent, WebViewHttpErrorEvent, WebViewMessageEvent, WebViewNavigation, WebViewOpenWindowEvent } from 'react-native-webview/lib/WebViewTypes';
+import { PRAYERS, type Identity } from './src/data/prayers';
 import { isWebScheme, normalizePlatformUrl, originOf } from './src/lib/url';
 import { useAppState } from './src/lib/appState';
-import type { Preferences } from './src/lib/storage';
 import { createSpeechBridge } from './src/lib/webSpeechBridge';
 import { makePageEvent, type BridgeMessage } from './src/lib/webEvents';
 
@@ -35,9 +36,22 @@ const NAVY = '#14254A';
 const MUTED = '#71809A';
 const PALE = '#F2F7FF';
 const START_URL = 'https://haneenstudy-tu9hntzp.manus.space/baccalaureate';
-// react-native-webview 14's generated native component declarations currently
-// resolve its public props to `never` under React Native 0.88 / TypeScript 6.
-const WebView = RawWebView as unknown as ComponentType<any>;
+type WebViewHandle = {
+  goBack(): void;
+  reload(): void;
+  stopLoading(): void;
+  injectJavaScript(script: string): void;
+};
+
+// WebView 14's Android React ref is not represented by its FunctionComponent declaration.
+const WebView = RawWebView as unknown as ComponentType<WebViewProps & { ref?: Ref<WebViewHandle> }>;
+
+type RecognitionSession = { id: string; phase: 'authorizing' | 'active' | 'stopping' };
+
+function samePageUrl(first: string, second: string): boolean {
+  try { return new URL(first).href === new URL(second).href; }
+  catch { return first === second; }
+}
 
 type Screen = 'setup' | 'identity' | 'prayer' | 'platform' | 'settings';
 
@@ -55,7 +69,7 @@ export function Brand({ compact = false }: { compact?: boolean }) {
 
 export function ActionButton({ title, onPress, secondary = false, disabled = false }: { title: string; onPress: () => void; secondary?: boolean; disabled?: boolean }) {
   return (
-    <Pressable onPress={onPress} disabled={disabled} style={({ pressed }) => [styles.actionButton, secondary && styles.actionButtonSecondary, disabled && styles.disabled, pressed && !disabled && styles.pressed]}>
+    <Pressable accessibilityRole="button" accessibilityState={{ disabled }} onPress={onPress} disabled={disabled} style={({ pressed }) => [styles.actionButton, secondary && styles.actionButtonSecondary, disabled && styles.disabled, pressed && !disabled && styles.pressed]}>
       <Text style={[styles.actionButtonText, secondary && styles.actionButtonTextSecondary]}>{title}</Text>
     </Pressable>
   );
@@ -73,37 +87,39 @@ export function AppScreen({ screen }: { screen: Screen }) {
   const [webLoading, setWebLoading] = useState(false);
   const [webError, setWebError] = useState('');
   const [canGoBack, setCanGoBack] = useState(false);
-  const [currentWebUrl, setCurrentWebUrl] = useState(activeUrl || prefs.platformUrl || '');
   const [webSourceUrl, setWebSourceUrl] = useState(activeUrl || prefs.platformUrl || '');
+  const webSourceUrlRef = useRef(webSourceUrl);
   const [voiceCount, setVoiceCount] = useState<number | null>(null);
   const [micStatus, setMicStatus] = useState('لم يُطلب الإذن بعد');
   const [recognitionStatus, setRecognitionStatus] = useState('يُفحص عند بدء التسجيل');
-  const webRef = useRef<any>(null);
-  const trustedOrigin = useMemo(() => originOf(activeUrl || prefs.platformUrl || '') || '', [activeUrl, prefs.platformUrl]);
+  const [urlSaving, setUrlSaving] = useState(false);
+  const [identitySaving, setIdentitySaving] = useState(false);
+  const webRef = useRef<WebViewHandle | null>(null);
+  const initialWebUrl = activeUrl || prefs.platformUrl || '';
+  const currentWebUrlRef = useRef(initialWebUrl);
+  const pendingApplyUrlRef = useRef<string | null>(null);
+  const httpFailureRef = useRef(false);
+  const recognitionSessionRef = useRef<RecognitionSession | null>(null);
+  const fullscreenActiveRef = useRef(false);
+  const platformFocusedRef = useRef(false);
+  const urlSavingRef = useRef(false);
+  const identitySavingRef = useRef(false);
+  const trustedOrigin = useMemo(() => originOf(activeUrl || prefs.platformUrl || ''), [activeUrl, prefs.platformUrl]);
+  const trustedPageOrigin = trustedOrigin && originOf(currentWebUrlRef.current) === trustedOrigin ? trustedOrigin : null;
   const prayer = prefs.identity ? PRAYERS[prefs.identity] : null;
+
+  const recordCurrentWebUrl = useCallback((url: string) => {
+    if (!url) return;
+    currentWebUrlRef.current = url;
+  }, []);
 
   useEffect(() => {
     if (screen === 'settings') setUrlInput(prefs.platformUrl || START_URL);
   }, [screen, prefs.platformUrl]);
 
   useEffect(() => {
-    if (screen !== 'settings') return;
-    let active = true;
-    Speech.getAvailableVoicesAsync().then((voices) => { if (active) setVoiceCount(voices.length); }).catch(() => { if (active) setVoiceCount(0); });
-    return () => { active = false; };
-  }, [screen]);
-
-  useEffect(() => {
-    if (screen === 'platform' && activeUrl && activeUrl !== webSourceUrl) {
-      setCurrentWebUrl(activeUrl);
-      setWebSourceUrl(activeUrl);
-      setCanGoBack(false);
-      setWebError('');
-    }
-  }, [activeUrl, screen, webSourceUrl]);
-
-  useEffect(() => {
     if (screen !== 'prayer' || !prayer) return;
+    const characters = Array.from(prayer.text);
     if (prefs.skipTyping) {
       setTypedText(prayer.text);
       setIsTyping(false);
@@ -115,8 +131,8 @@ export function AppScreen({ screen }: { screen: Screen }) {
     let timeout: ReturnType<typeof setTimeout>;
     const tick = () => {
       index += 1;
-      setTypedText(prayer.text.slice(0, index));
-      if (index >= prayer.text.length) {
+      setTypedText(characters.slice(0, index).join(''));
+      if (index >= characters.length) {
         setIsTyping(false);
         return;
       }
@@ -126,21 +142,123 @@ export function AppScreen({ screen }: { screen: Screen }) {
     return () => clearTimeout(timeout);
   }, [screen, prayer?.text, prefs.typingSpeed, prefs.skipTyping]);
 
+  useFocusEffect(useCallback(() => {
+    if (screen !== 'settings') return;
+    let active = true;
+    Promise.all([
+      Speech.getAvailableVoicesAsync(),
+      ExpoSpeechRecognitionModule.getPermissionsAsync(),
+      Promise.resolve(ExpoSpeechRecognitionModule.isRecognitionAvailable()),
+    ]).then(([voices, permission, recognitionAvailable]) => {
+      if (!active) return;
+      setVoiceCount(voices.length);
+      setMicStatus(permission.granted ? 'الإذن ممنوح' : permission.status === 'undetermined' ? 'لم يُطلب الإذن بعد' : 'الإذن مرفوض؛ راجع إعدادات الجهاز');
+      setRecognitionStatus(recognitionAvailable ? 'خدمة التعرف متاحة' : 'لا توجد خدمة تعرف متاحة على الجهاز');
+    }).catch(() => {
+      if (!active) return;
+      setVoiceCount(0);
+      setMicStatus('حالة إذن الميكروفون غير متاحة');
+      setRecognitionStatus('الخدمة غير متاحة');
+    });
+    return () => { active = false; };
+  }, [screen]));
+
+  useEffect(() => {
+    if (screen === 'platform' && activeUrl && activeUrl !== webSourceUrl) {
+      webSourceUrlRef.current = activeUrl;
+      recordCurrentWebUrl(activeUrl);
+      setWebSourceUrl(activeUrl);
+      setCanGoBack(false);
+      setWebError('');
+      httpFailureRef.current = false;
+    }
+  }, [activeUrl, recordCurrentWebUrl, screen, webSourceUrl]);
+
   const injectEvent = useCallback((payload: Record<string, unknown>) => {
+    if (!trustedOrigin || originOf(currentWebUrlRef.current) !== trustedOrigin) return;
     webRef.current?.injectJavaScript(makePageEvent(payload));
-  }, []);
+  }, [trustedOrigin]);
+
+  useFocusEffect(useCallback(() => {
+    if (screen !== 'platform') return;
+    platformFocusedRef.current = true;
+    return () => {
+      platformFocusedRef.current = false;
+      if (fullscreenActiveRef.current) {
+        fullscreenActiveRef.current = false;
+        void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => undefined);
+      }
+      const session = recognitionSessionRef.current;
+      if (session) {
+        if (session.phase === 'authorizing') {
+          recognitionSessionRef.current = null;
+          injectEvent({ kind: 'recognition', name: 'end', sessionId: session.id });
+        } else if (session.phase !== 'stopping') {
+          session.phase = 'stopping';
+          ExpoSpeechRecognitionModule.abort();
+        }
+      }
+      void Speech.stop().catch(() => undefined);
+    };
+  }, [screen, injectEvent]));
 
   useEffect(() => {
     if (screen !== 'platform') return;
-    const start = ExpoSpeechRecognitionModule.addListener('start', () => { setRecognitionStatus('الخدمة تعمل'); injectEvent({ kind: 'recognition', name: 'start' }); });
-    const end = ExpoSpeechRecognitionModule.addListener('end', () => { setRecognitionStatus('انتهى التسجيل'); injectEvent({ kind: 'recognition', name: 'end' }); });
-    const result = ExpoSpeechRecognitionModule.addListener('result', (event) => {
-      const item = event.results?.[0];
-      injectEvent({ kind: 'recognition', name: 'result', transcript: item?.transcript || '', confidence: item?.confidence || 0, isFinal: event.isFinal });
+    const start = ExpoSpeechRecognitionModule.addListener('start', () => {
+      const session = recognitionSessionRef.current;
+      if (!session || session.phase === 'stopping') return;
+      session.phase = 'active';
+      setRecognitionStatus('الخدمة تعمل');
+      if (platformFocusedRef.current) injectEvent({ kind: 'recognition', name: 'start', sessionId: session.id });
     });
-    const error = ExpoSpeechRecognitionModule.addListener('error', (event) => { setRecognitionStatus('تعذر استخدام الخدمة'); if (event.error === 'not-allowed') setMicStatus('الإذن مرفوض'); injectEvent({ kind: 'recognition', name: 'error', error: event.error, message: event.message }); });
-    return () => { start.remove(); end.remove(); result.remove(); error.remove(); };
+    const end = ExpoSpeechRecognitionModule.addListener('end', () => {
+      const session = recognitionSessionRef.current;
+      if (!session) return;
+      recognitionSessionRef.current = null;
+      setRecognitionStatus('انتهى التسجيل');
+      injectEvent({ kind: 'recognition', name: 'end', sessionId: session.id });
+    });
+    const result = ExpoSpeechRecognitionModule.addListener('result', (event) => {
+      const session = recognitionSessionRef.current;
+      if (!session || session.phase !== 'active') return;
+      if (!platformFocusedRef.current) return;
+      const item = event.results?.[0];
+      injectEvent({ kind: 'recognition', name: 'result', sessionId: session.id, transcript: item?.transcript || '', confidence: item?.confidence || 0, isFinal: event.isFinal });
+    });
+    const error = ExpoSpeechRecognitionModule.addListener('error', (event) => {
+      const session = recognitionSessionRef.current;
+      if (!session) return;
+      recognitionSessionRef.current = null;
+      setRecognitionStatus('تعذر استخدام الخدمة');
+      if (event.error === 'not-allowed') setMicStatus('الإذن مرفوض');
+      injectEvent({ kind: 'recognition', name: 'error', sessionId: session.id, error: event.error, message: event.message });
+    });
+    return () => {
+      start.remove(); end.remove(); result.remove(); error.remove();
+      recognitionSessionRef.current = null;
+    };
   }, [screen, injectEvent]);
+
+  useEffect(() => {
+    if (screen !== 'platform') return;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') return;
+      if (fullscreenActiveRef.current) {
+        fullscreenActiveRef.current = false;
+        void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => undefined);
+      }
+      const session = recognitionSessionRef.current;
+      if (session) {
+        if (session.phase === 'authorizing') recognitionSessionRef.current = null;
+        else if (session.phase !== 'stopping') {
+          session.phase = 'stopping';
+          ExpoSpeechRecognitionModule.abort();
+        }
+      }
+      void Speech.stop().catch(() => undefined);
+    });
+    return () => subscription.remove();
+  }, [screen]);
 
   useFocusEffect(useCallback(() => {
     if (screen !== 'platform') return;
@@ -155,19 +273,28 @@ export function AppScreen({ screen }: { screen: Screen }) {
   }, [screen, canGoBack]));
 
   const saveInitialUrl = async () => {
+    if (urlSavingRef.current) return;
     const result = normalizePlatformUrl(urlInput);
     if (!result.value) {
       setUrlError(result.error || 'تحقق من الرابط.');
       return;
     }
     setUrlError('');
-    const next: Preferences = { ...prefs, platformUrl: result.value };
-    await patchPrefs(next);
-    setUrlInput(result.value);
-    router.replace(next.identity ? '/prayer' : '/identity');
+    urlSavingRef.current = true;
+    setUrlSaving(true);
+    try {
+      const saved = await patchPrefs({ platformUrl: result.value });
+      if (!saved) return;
+      setUrlInput(result.value);
+      router.replace(prefs.identity ? '/prayer' : '/identity');
+    } finally {
+      urlSavingRef.current = false;
+      setUrlSaving(false);
+    }
   };
 
   const saveSettingsUrl = async (applyNow: boolean) => {
+    if (urlSavingRef.current) return;
     const result = normalizePlatformUrl(urlInput);
     if (!result.value) {
       setUrlError(result.error || 'تحقق من الرابط.');
@@ -175,55 +302,136 @@ export function AppScreen({ screen }: { screen: Screen }) {
     }
     const oldUrl = prefs.platformUrl;
     setUrlError('');
-    const next: Preferences = { ...prefs, platformUrl: result.value };
-    await patchPrefs(next);
-    setUrlInput(result.value);
-    if (applyNow) {
-      setRollbackUrl(oldUrl && oldUrl !== result.value ? oldUrl : null);
-      setActiveUrl(result.value);
-      if (params.from === 'platform') router.back();
-      else router.replace('/platform');
-    } else if (oldUrl && oldUrl !== result.value) {
-      Alert.alert('تم حفظ الرابط', 'سيُستخدم الرابط الجديد عند فتح المنصة لاحقًا.');
+    urlSavingRef.current = true;
+    setUrlSaving(true);
+    try {
+      setUrlInput(result.value);
+      if (applyNow) {
+        const changed = oldUrl !== result.value;
+        pendingApplyUrlRef.current = changed ? result.value : null;
+        httpFailureRef.current = false;
+        setRollbackUrl(changed ? oldUrl : null);
+        setActiveUrl(result.value);
+        if (params.from === 'platform') router.back();
+        else router.replace('/platform');
+        return;
+      }
+
+      pendingApplyUrlRef.current = null;
+      const saved = await patchPrefs({ platformUrl: result.value });
+      if (!saved) return;
+      if (oldUrl && oldUrl !== result.value) {
+        Alert.alert('تم حفظ الرابط', 'سيُستخدم الرابط الجديد عند فتح المنصة لاحقًا.');
+      }
+    } finally {
+      urlSavingRef.current = false;
+      setUrlSaving(false);
+    }
+  };
+
+  const selectIdentity = async (identity: Identity) => {
+    if (identitySavingRef.current) return;
+    identitySavingRef.current = true;
+    setIdentitySaving(true);
+    try {
+      if (await patchPrefs({ identity })) router.replace('/prayer');
+    } finally {
+      identitySavingRef.current = false;
+      setIdentitySaving(false);
     }
   };
 
   const beginRecognition = async (message: Extract<BridgeMessage, { type: 'recognition_start' }>) => {
+    const sessionId = message.sessionId;
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) return;
+    if (recognitionSessionRef.current) {
+      injectEvent({ kind: 'recognition', name: 'error', sessionId, error: 'recognition-already-started', message: 'يوجد طلب تعرف آخر قيد التشغيل.' });
+      return;
+    }
+    const session: RecognitionSession = { id: sessionId, phase: 'authorizing' };
+    recognitionSessionRef.current = session;
     try {
       const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       setMicStatus(permission.granted ? 'الإذن ممنوح' : 'الإذن مرفوض');
+      if (recognitionSessionRef.current !== session) return;
       if (!permission.granted) {
+        recognitionSessionRef.current = null;
         setRecognitionStatus('الإذن مطلوب قبل البدء');
-        injectEvent({ kind: 'recognition', name: 'error', error: 'not-allowed', message: 'لم يُمنح إذن الميكروفون أو التعرف على الكلام.' });
+        injectEvent({ kind: 'recognition', name: 'error', sessionId, error: 'not-allowed', message: 'لم يُمنح إذن الميكروفون أو التعرف على الكلام.' });
+        return;
+      }
+      if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
+        recognitionSessionRef.current = null;
+        setRecognitionStatus('لا توجد خدمة تعرف متاحة على الجهاز');
+        injectEvent({ kind: 'recognition', name: 'error', sessionId, error: 'service-not-allowed', message: 'لا توجد خدمة تعرف على الكلام متاحة على هذا الجهاز.' });
         return;
       }
       setRecognitionStatus('جارٍ بدء الخدمة');
+      session.phase = 'active';
+      const requestedLanguage = message.lang || 'ar-EG';
+      const language = /^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(requestedLanguage) ? requestedLanguage : 'ar-EG';
+      const maxAlternatives = Number.isInteger(message.maxAlternatives) ? Math.min(5, Math.max(1, message.maxAlternatives || 1)) : 1;
       ExpoSpeechRecognitionModule.start({
-        lang: message.lang || 'ar-EG',
+        lang: language,
         continuous: !!message.continuous,
         interimResults: !!message.interimResults,
-        maxAlternatives: message.maxAlternatives || 1,
+        maxAlternatives,
       });
     } catch (error) {
+      if (recognitionSessionRef.current === session) recognitionSessionRef.current = null;
       setMicStatus('الخدمة غير متاحة');
       setRecognitionStatus('الخدمة غير متاحة');
-      injectEvent({ kind: 'recognition', name: 'error', error: 'service-not-allowed', message: String(error) });
+      injectEvent({ kind: 'recognition', name: 'error', sessionId, error: 'service-not-allowed', message: String(error).slice(0, 240) });
+    }
+  };
+
+  const finishRecognition = (sessionId: string, abort: boolean) => {
+    const session = recognitionSessionRef.current;
+    if (!session || session.id !== sessionId) return;
+    if (session.phase === 'authorizing') {
+      recognitionSessionRef.current = null;
+      setRecognitionStatus('أُلغي طلب التسجيل قبل بدء الخدمة');
+      injectEvent({ kind: 'recognition', name: 'end', sessionId });
+      return;
+    }
+    if (session.phase === 'stopping') return;
+    session.phase = 'stopping';
+    setRecognitionStatus('جارٍ إيقاف التسجيل');
+    try {
+      if (abort) ExpoSpeechRecognitionModule.abort();
+      else ExpoSpeechRecognitionModule.stop();
+    } catch {
+      recognitionSessionRef.current = null;
+      setRecognitionStatus('تعذر إيقاف التسجيل');
+      injectEvent({ kind: 'recognition', name: 'error', sessionId, error: 'aborted', message: 'تعذر إيقاف خدمة التعرف.' });
     }
   };
 
   const onWebMessage = async (event: WebViewMessageEvent) => {
-    const sourceOrigin = originOf(event.nativeEvent.url || currentWebUrl);
-    if (!sourceOrigin || sourceOrigin !== trustedOrigin) return;
+    const sourceOrigin = originOf(event.nativeEvent.url);
+    if (!trustedOrigin || sourceOrigin !== trustedOrigin) return;
     let message: BridgeMessage;
     try { message = JSON.parse(event.nativeEvent.data) as BridgeMessage; } catch { return; }
+    if (!platformFocusedRef.current && message.type === 'recognition_start') {
+      injectEvent({ kind: 'recognition', name: 'error', sessionId: message.sessionId, error: 'aborted', message: 'توقفت الخدمة لأن صفحة المنصة لم تعد في الواجهة.' });
+      return;
+    }
+    if (!platformFocusedRef.current && message.type === 'tts_speak') {
+      injectEvent({ kind: 'tts', name: 'error', id: message.id, error: 'page-not-focused' });
+      return;
+    }
     switch (message.type) {
       case 'tts_speak': {
         const id = message.id;
+        if (!id || id.length > 120 || typeof message.text !== 'string' || message.text.length > 40000) break;
+        const requestedLanguage = message.lang || 'ar-EG';
+        const language = /^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(requestedLanguage) ? requestedLanguage : 'ar-EG';
+        const bounded = (value: number | undefined, fallback: number, min: number, max: number) => Number.isFinite(value) ? Math.min(max, Math.max(min, value as number)) : fallback;
         Speech.speak(message.text, {
-          language: message.lang || 'ar-EG',
-          rate: Math.min(2, Math.max(0.1, message.rate || 1)),
-          pitch: Math.min(2, Math.max(0.1, message.pitch || 1)),
-          volume: Math.min(1, Math.max(0, message.volume ?? 1)),
+          language,
+          rate: bounded(message.rate, 1, 0.1, 2),
+          pitch: bounded(message.pitch, 1, 0.1, 2),
+          volume: bounded(message.volume, 1, 0, 1),
           onStart: () => injectEvent({ kind: 'tts', name: 'start', id }),
           onDone: () => injectEvent({ kind: 'tts', name: 'end', id }),
           onStopped: () => injectEvent({ kind: 'tts', name: 'end', id }),
@@ -250,12 +458,13 @@ export function AppScreen({ screen }: { screen: Screen }) {
         break;
       }
       case 'recognition_start': await beginRecognition(message); break;
-      case 'recognition_stop': ExpoSpeechRecognitionModule.stop(); break;
-      case 'recognition_abort': ExpoSpeechRecognitionModule.abort(); break;
+      case 'recognition_stop': finishRecognition(message.sessionId, false); break;
+      case 'recognition_abort': finishRecognition(message.sessionId, true); break;
       case 'fullscreen':
+        fullscreenActiveRef.current = platformFocusedRef.current && !!message.active;
         try {
-          if (message.active) await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-          else await ScreenOrientation.unlockAsync();
+          if (!platformFocusedRef.current || !message.active) await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+          else await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
         } catch { /* The device or OS may not allow orientation changes. */ }
         break;
     }
@@ -296,8 +505,8 @@ export function AppScreen({ screen }: { screen: Screen }) {
             accessibilityLabel="رابط المنصة التعليمية"
           />
           {!!urlError && <Text style={styles.errorText}>{urlError}</Text>}
-          <ActionButton title={settings ? 'حفظ الرابط' : 'حفظ ومتابعة'} onPress={() => settings ? saveSettingsUrl(false) : saveInitialUrl()} />
-          {settings && <ActionButton title="تطبيق الآن" secondary onPress={() => saveSettingsUrl(true)} />}
+          <ActionButton title={settings ? 'حفظ الرابط' : 'حفظ ومتابعة'} disabled={urlSaving} onPress={() => settings ? saveSettingsUrl(false) : saveInitialUrl()} />
+          {settings && <ActionButton title="تطبيق الآن" secondary disabled={urlSaving} onPress={() => saveSettingsUrl(true)} />}
           {settings && <ActionButton title="رجوع" secondary onPress={() => router.back()} />}
           {!settings && <Text style={styles.hint}>الرابط الافتراضي مقترح ويمكنك تغييره قبل الحفظ.</Text>}
         </View>
@@ -313,17 +522,17 @@ export function AppScreen({ screen }: { screen: Screen }) {
     return (
       <View style={styles.page}>
         <StatusBar style="dark" />
-        <View style={styles.identityContent}>
+        <ScrollView contentContainerStyle={styles.identityContent} keyboardShouldPersistTaps="handled">
           <Brand />
           <View style={styles.card}>
             <Text style={styles.eyebrow}>خطوة واحدة ونبدأ</Text>
             <Text style={styles.heading}>أنت مين؟</Text>
             <Text style={styles.body}>اختار هويتك عشان يظهر دعاءك في بداية كل تشغيل.</Text>
-            <Pressable style={styles.identityChoice} onPress={async () => { await patchPrefs({ ...prefs, identity: 'saif' }); router.replace('/prayer'); }}><Text style={styles.identityEmoji}>✦</Text><Text style={styles.identityText}>سيف</Text><Text style={styles.choiceArrow}>‹</Text></Pressable>
-            <Pressable style={styles.identityChoice} onPress={async () => { await patchPrefs({ ...prefs, identity: 'hanoun' }); router.replace('/prayer'); }}><Text style={styles.identityEmoji}>✦</Text><Text style={styles.identityText}>حنون</Text><Text style={styles.choiceArrow}>‹</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="اختيار هوية سيف" accessibilityState={{ selected: prefs.identity === 'saif', disabled: identitySaving }} disabled={identitySaving} style={styles.identityChoice} onPress={() => selectIdentity('saif')}><Text style={styles.identityEmoji}>✦</Text><Text style={styles.identityText}>سيف</Text><Text style={styles.choiceArrow}>‹</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="اختيار هوية حنون" accessibilityState={{ selected: prefs.identity === 'hanoun', disabled: identitySaving }} disabled={identitySaving} style={styles.identityChoice} onPress={() => selectIdentity('hanoun')}><Text style={styles.identityEmoji}>✦</Text><Text style={styles.identityText}>حنون</Text><Text style={styles.choiceArrow}>‹</Text></Pressable>
           </View>
           <Text style={styles.footerNote}>اختيارك محفوظ على جهازك، وتقدر تغيّره من الإعدادات.</Text>
-        </View>
+        </ScrollView>
       </View>
     );
   }
@@ -333,7 +542,7 @@ export function AppScreen({ screen }: { screen: Screen }) {
     return (
       <View style={styles.page}>
         <StatusBar style="dark" />
-        <ScrollView contentContainerStyle={styles.prayerContent}>
+        <ScrollView style={styles.prayerScroll} contentContainerStyle={styles.prayerContent}>
           <Brand compact />
           <View style={styles.prayerCard}>
             <View style={styles.prayerMark}><Text style={styles.prayerMarkText}>✦</Text></View>
@@ -342,12 +551,12 @@ export function AppScreen({ screen }: { screen: Screen }) {
             <View style={styles.prayerRule} />
             <Text selectable style={[styles.prayerText, { fontSize: prefs.prayerFontSize, lineHeight: prefs.prayerFontSize * 1.95 }]}>{typedText}{isTyping ? '▍' : ''}</Text>
           </View>
-          <View style={styles.prayerActions}>
-            {isTyping && <ActionButton title="تخطي الكتابة" secondary onPress={completeText} />}
-            {!isTyping && <ActionButton title="التالي — افتح المنصة" onPress={openSavedSite} />}
-            <Pressable onPress={() => openSettings('prayer')} style={styles.textButton}><Text style={styles.textButtonLabel}>الإعدادات</Text></Pressable>
-          </View>
         </ScrollView>
+        <View style={styles.prayerActions}>
+          {isTyping && <ActionButton title="تخطي الكتابة" secondary onPress={completeText} />}
+          {!isTyping && <ActionButton title="التالي — افتح المنصة" onPress={openSavedSite} />}
+          <Pressable accessibilityRole="button" accessibilityLabel="فتح الإعدادات" onPress={() => openSettings('prayer')} style={styles.textButton}><Text style={styles.textButtonLabel}>الإعدادات</Text></Pressable>
+        </View>
       </View>
     );
   }
@@ -361,23 +570,23 @@ export function AppScreen({ screen }: { screen: Screen }) {
           <Text style={styles.heading}>إعدادات التطبيق</Text>
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>المنصة</Text>
-            <Text style={styles.currentUrl} numberOfLines={2}>{prefs.platformUrl || 'لا يوجد رابط محفوظ'}</Text>
+            <Text selectable style={styles.currentUrl} numberOfLines={2}>{prefs.platformUrl || 'لا يوجد رابط محفوظ'}</Text>
             <TextInput value={urlInput} onChangeText={(value) => { setUrlInput(value); setUrlError(''); }} placeholder="https://…" autoCapitalize="none" autoCorrect={false} keyboardType="url" textAlign="left" style={styles.input} />
             {!!urlError && <Text style={styles.errorText}>{urlError}</Text>}
-            <ActionButton title="حفظ الرابط" onPress={() => saveSettingsUrl(false)} />
-            <ActionButton title="تطبيق الرابط الآن" secondary onPress={() => saveSettingsUrl(true)} />
+            <ActionButton title="حفظ الرابط" disabled={urlSaving} onPress={() => saveSettingsUrl(false)} />
+            <ActionButton title="تطبيق الرابط الآن" secondary disabled={urlSaving} onPress={() => saveSettingsUrl(true)} />
           </View>
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>الهوية</Text>
             <Text style={styles.body}>الهوية الحالية: {prefs.identity ? PRAYERS[prefs.identity].name : 'غير محددة'}</Text>
             <View style={styles.inlineActions}>
-              <ActionButton title="سيف" secondary onPress={() => patchPrefs({ ...prefs, identity: 'saif' })} />
-              <ActionButton title="حنون" secondary onPress={() => patchPrefs({ ...prefs, identity: 'hanoun' })} />
+              <ActionButton title="سيف" secondary onPress={() => { void patchPrefs({ identity: 'saif' }); }} />
+              <ActionButton title="حنون" secondary onPress={() => { void patchPrefs({ identity: 'hanoun' }); }} />
             </View>
           </View>
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>الإشعارات</Text>
-            <View style={styles.settingRow}><Text style={styles.body}>إشعار ترحيب عند فتح التطبيق</Text><Switch value={prefs.welcomeNotifications} onValueChange={(value) => patchPrefs({ ...prefs, welcomeNotifications: value })} trackColor={{ true: BLUE }} /></View>
+            <View style={styles.settingRow}><Text style={styles.body}>إشعار ترحيب عند فتح التطبيق</Text><Switch accessibilityLabel="إشعار الترحيب عند فتح التطبيق" accessibilityState={{ checked: prefs.welcomeNotifications }} value={prefs.welcomeNotifications} onValueChange={(value) => { void patchPrefs({ welcomeNotifications: value }); }} trackColor={{ true: BLUE }} /></View>
             <Text style={styles.body}>حالة الإذن: {notificationStatus}</Text>
             <Pressable onPress={() => Linking.openSettings()} style={styles.textButton}><Text style={styles.textButtonLabel}>فتح إعدادات أندرويد</Text></Pressable>
           </View>
@@ -387,9 +596,9 @@ export function AppScreen({ screen }: { screen: Screen }) {
             <Text style={styles.body}>التعرف على الكلام: {recognitionStatus}</Text>
             <Text style={styles.body}>الميكروفون: {micStatus}</Text>
             <Text style={[styles.hint, { marginTop: 8 }]}>إيقاف/استئناف النطق الأصلي غير متاح عبر Expo Speech على Android حاليًا.</Text>
-            <View style={styles.settingRow}><Text style={styles.body}>سرعة الكتابة</Text><View style={styles.speedControl}><Pressable onPress={() => patchPrefs({ ...prefs, typingSpeed: Math.min(80, prefs.typingSpeed + 5) })} style={styles.speedButton}><Text style={styles.speedText}>+</Text></Pressable><Text style={styles.speedValue}>{prefs.typingSpeed} ms</Text><Pressable onPress={() => patchPrefs({ ...prefs, typingSpeed: Math.max(5, prefs.typingSpeed - 5) })} style={styles.speedButton}><Text style={styles.speedText}>−</Text></Pressable></View></View>
-            <View style={styles.settingRow}><Text style={styles.body}>حجم خط الدعاء</Text><View style={styles.speedControl}><Pressable onPress={() => patchPrefs({ ...prefs, prayerFontSize: Math.min(26, prefs.prayerFontSize + 1) })} style={styles.speedButton}><Text style={styles.speedText}>+</Text></Pressable><Text style={styles.speedValue}>{prefs.prayerFontSize}</Text><Pressable onPress={() => patchPrefs({ ...prefs, prayerFontSize: Math.max(15, prefs.prayerFontSize - 1) })} style={styles.speedButton}><Text style={styles.speedText}>−</Text></Pressable></View></View>
-            <View style={styles.settingRow}><Text style={styles.body}>تخطي تأثير الكتابة</Text><Switch value={prefs.skipTyping} onValueChange={(value) => patchPrefs({ ...prefs, skipTyping: value })} trackColor={{ true: BLUE }} /></View>
+            <View style={styles.settingRow}><Text style={styles.body}>سرعة الكتابة</Text><View style={styles.speedControl}><Pressable accessibilityRole="button" accessibilityLabel="إبطاء ظهور الدعاء" accessibilityState={{ disabled: prefs.typingSpeed >= 80 }} disabled={prefs.typingSpeed >= 80} onPress={() => { void patchPrefs({ typingSpeed: Math.min(80, prefs.typingSpeed + 5) }); }} style={styles.speedButton}><Text style={styles.speedText}>+</Text></Pressable><Text style={styles.speedValue}>{prefs.typingSpeed} ms</Text><Pressable accessibilityRole="button" accessibilityLabel="تسريع ظهور الدعاء" accessibilityState={{ disabled: prefs.typingSpeed <= 5 }} disabled={prefs.typingSpeed <= 5} onPress={() => { void patchPrefs({ typingSpeed: Math.max(5, prefs.typingSpeed - 5) }); }} style={styles.speedButton}><Text style={styles.speedText}>−</Text></Pressable></View></View>
+            <View style={styles.settingRow}><Text style={styles.body}>حجم خط الدعاء</Text><View style={styles.speedControl}><Pressable accessibilityRole="button" accessibilityLabel="تكبير خط الدعاء" accessibilityState={{ disabled: prefs.prayerFontSize >= 26 }} disabled={prefs.prayerFontSize >= 26} onPress={() => { void patchPrefs({ prayerFontSize: Math.min(26, prefs.prayerFontSize + 1) }); }} style={styles.speedButton}><Text style={styles.speedText}>+</Text></Pressable><Text style={styles.speedValue}>{prefs.prayerFontSize}</Text><Pressable accessibilityRole="button" accessibilityLabel="تصغير خط الدعاء" accessibilityState={{ disabled: prefs.prayerFontSize <= 15 }} disabled={prefs.prayerFontSize <= 15} onPress={() => { void patchPrefs({ prayerFontSize: Math.max(15, prefs.prayerFontSize - 1) }); }} style={styles.speedButton}><Text style={styles.speedText}>−</Text></Pressable></View></View>
+            <View style={styles.settingRow}><Text style={styles.body}>تخطي تأثير الكتابة</Text><Switch accessibilityLabel="تجاوز تأثير كتابة الدعاء" accessibilityState={{ checked: prefs.skipTyping }} value={prefs.skipTyping} onValueChange={(value) => { void patchPrefs({ skipTyping: value }); }} trackColor={{ true: BLUE }} /></View>
           </View>
           <View style={styles.card}><Text style={styles.sectionTitle}>وضع الكشك</Text><Text style={styles.body}>ملء شاشة الفيديو مدعوم حسب الموقع. قفل الجهاز بنمط Kiosk الحقيقي غير مفعّل ويحتاج إدارة جهاز أندرويد.</Text></View>
           <ActionButton title="العودة" secondary onPress={() => router.back()} />
@@ -398,7 +607,6 @@ export function AppScreen({ screen }: { screen: Screen }) {
     );
   }
 
-  const trustedPage = originOf(currentWebUrl) === trustedOrigin;
   if (!prefs.platformUrl || !webSourceUrl) return <View style={styles.loadingScreen}><StatusBar style="dark" /><ActivityIndicator size="large" color={BLUE} /><Text style={styles.body}>بنجهّز المنصة…</Text></View>;
   return (
     <View style={styles.webPage}>
@@ -426,22 +634,71 @@ export function AppScreen({ screen }: { screen: Screen }) {
           setSupportMultipleWindows={false}
           mixedContentMode="never"
           originWhitelist={['https://*', 'about:blank']}
-          injectedJavaScriptBeforeContentLoaded={trustedPage ? createSpeechBridge(trustedOrigin) : 'true;'}
-          onShouldStartLoadWithRequest={(request: WebViewNavigation) => request.url === 'about:blank' || isWebScheme(request.url)}
-          onNavigationStateChange={(state: WebViewNavigation) => { setCanGoBack(state.canGoBack); setCurrentWebUrl(state.url || currentWebUrl); }}
-          onLoadStart={() => { setWebLoading(true); setWebError(''); }}
-          onLoadEnd={() => setWebLoading(false)}
-          onLoad={() => { setWebLoading(false); setWebError(''); setRollbackUrl(null); }}
-          onError={(event: WebViewErrorEvent) => { setWebLoading(false); if (event.nativeEvent.code !== -1) setWebError('تعذر فتح الصفحة. تحقق من اتصال الإنترنت أو جرّب الرابط مرة أخرى.'); }}
-          onHttpError={(event: WebViewHttpErrorEvent) => { if (event.nativeEvent.statusCode >= 500) setWebError('المنصة تواجه مشكلة مؤقتة. حاول مرة أخرى بعد قليل.'); }}
-          onMessage={onWebMessage}
+          injectedJavaScriptBeforeContentLoaded={trustedPageOrigin ? createSpeechBridge(trustedPageOrigin) : 'true;'}
+          onShouldStartLoadWithRequest={(request) => webSourceUrlRef.current === webSourceUrl && (request.url === 'about:blank' || isWebScheme(request.url))}
+          onNavigationStateChange={(state: WebViewNavigation) => {
+            if (webSourceUrlRef.current !== webSourceUrl) return;
+            const url = state.url || currentWebUrlRef.current;
+            if (originOf(currentWebUrlRef.current) === trustedOrigin && originOf(url) !== trustedOrigin) {
+              const session = recognitionSessionRef.current;
+              if (session) {
+                injectEvent({ kind: 'recognition', name: 'end', sessionId: session.id });
+                if (session.phase === 'authorizing') recognitionSessionRef.current = null;
+                else if (session.phase !== 'stopping') {
+                  session.phase = 'stopping';
+                  ExpoSpeechRecognitionModule.abort();
+                }
+              }
+              injectEvent({ kind: 'tts-reset' });
+              void Speech.stop().catch(() => undefined);
+            }
+            recordCurrentWebUrl(url);
+            setCanGoBack(state.canGoBack);
+          }}
+          onLoadStart={() => { if (webSourceUrlRef.current !== webSourceUrl) return; httpFailureRef.current = false; setWebLoading(true); setWebError(''); }}
+          onLoadEnd={() => { if (webSourceUrlRef.current === webSourceUrl) setWebLoading(false); }}
+          onLoad={async (event) => {
+            if (webSourceUrlRef.current !== webSourceUrl) return;
+            recordCurrentWebUrl(event.nativeEvent.url || currentWebUrlRef.current);
+            setWebLoading(false);
+            if (httpFailureRef.current) return;
+            setWebError('');
+            const pendingUrl = pendingApplyUrlRef.current;
+            if (!pendingUrl) {
+              setRollbackUrl(null);
+              return;
+            }
+            if (await patchPrefs({ platformUrl: pendingUrl })) {
+              pendingApplyUrlRef.current = null;
+              setRollbackUrl(null);
+            } else {
+              setWebError('تم فتح الرابط الجديد، لكن تعذر حفظه. سيظل الرابط السابق محفوظًا على الجهاز.');
+            }
+          }}
+          onError={(event: WebViewErrorEvent) => {
+            if (webSourceUrlRef.current !== webSourceUrl) return;
+            httpFailureRef.current = true;
+            setWebLoading(false);
+            setWebError(`تعذر فتح الصفحة${event.nativeEvent.code ? ` (رمز ${event.nativeEvent.code})` : ''}. تحقق من اتصال الإنترنت أو جرّب الرابط مرة أخرى.`);
+          }}
+          onHttpError={(event: WebViewHttpErrorEvent) => {
+            if (webSourceUrlRef.current !== webSourceUrl) return;
+            const failedUrl = event.nativeEvent.url;
+            if (failedUrl && currentWebUrlRef.current && !samePageUrl(failedUrl, currentWebUrlRef.current)) return;
+            httpFailureRef.current = true;
+            setWebLoading(false);
+            const status = event.nativeEvent.statusCode;
+            setWebError(status >= 500 ? `استجابت المنصة بخطأ مؤقت (${status}). حاول مرة أخرى بعد قليل.` : `استجابت المنصة بخطأ (${status}). راجع الرابط أو بيانات الدخول ثم أعد المحاولة.`);
+          }}
+          onMessage={(event) => { if (webSourceUrlRef.current === webSourceUrl) void onWebMessage(event); }}
           onOpenWindow={(event: WebViewOpenWindowEvent) => {
+            if (webSourceUrlRef.current !== webSourceUrl) return;
             const target = event.nativeEvent.targetUrl;
-            if (isWebScheme(target)) { setCurrentWebUrl(target); webRef.current?.stopLoading(); webRef.current?.injectJavaScript(`window.location.href=${JSON.stringify(target)};true;`); }
+            if (isWebScheme(target)) { recordCurrentWebUrl(target); webRef.current?.stopLoading(); webRef.current?.injectJavaScript(`window.location.href=${JSON.stringify(target)};true;`); }
           }}
         />
         {webLoading && <View pointerEvents="none" style={styles.loadingOverlay}><ActivityIndicator size="small" color={BLUE} /><Text style={styles.loadingLabel}>جارٍ فتح المنصة…</Text></View>}
-        {!!webError && <View style={styles.webError}><View style={styles.errorCard}><Text style={styles.errorTitle}>ما قدرنا نفتح المنصة</Text><Text style={styles.body}>{webError}</Text><ActionButton title="إعادة المحاولة" onPress={() => { setWebError(''); webRef.current?.reload(); }} />{rollbackUrl && <ActionButton title="الرجوع للرابط السابق" secondary onPress={async () => { const oldUrl = rollbackUrl; setRollbackUrl(null); await patchPrefs({ ...prefs, platformUrl: oldUrl }); setActiveUrl(oldUrl); setUrlInput(oldUrl); setCurrentWebUrl(oldUrl); setWebSourceUrl(oldUrl); setWebError(''); }} />}<ActionButton title="الإعدادات" secondary onPress={() => openSettings('platform')} /></View></View>}
+        {!!webError && <View style={styles.webError}><View style={styles.errorCard}><Text style={styles.errorTitle}>ما قدرنا نفتح المنصة</Text><Text style={styles.body}>{webError}</Text><ActionButton title="إعادة المحاولة" onPress={() => { httpFailureRef.current = false; setWebError(''); webRef.current?.reload(); }} />{rollbackUrl && <ActionButton title="الرجوع للرابط السابق" secondary onPress={() => { const oldUrl = rollbackUrl; pendingApplyUrlRef.current = null; httpFailureRef.current = false; setRollbackUrl(null); setActiveUrl(oldUrl); setUrlInput(oldUrl); recordCurrentWebUrl(oldUrl); webSourceUrlRef.current = oldUrl; setWebSourceUrl(oldUrl); setCanGoBack(false); setWebError(''); }} />}<ActionButton title="الإعدادات" secondary onPress={() => openSettings('platform')} /></View></View>}
       </View>
       {showToolbar && <View style={styles.toolbar}>
         <Pressable style={styles.toolButton} onPress={() => canGoBack ? webRef.current?.goBack() : router.back()}><Text style={styles.toolIcon}>‹</Text><Text style={styles.toolLabel}>رجوع</Text></Pressable>
@@ -476,7 +733,8 @@ const styles = StyleSheet.create({
   actionButtonTextSecondary: { color: NAVY },
   disabled: { opacity: 0.45 },
   pressed: { opacity: 0.82, transform: [{ scale: 0.99 }] },
-  identityContent: { flex: 1, justifyContent: 'center', padding: 22, gap: 24 },
+  identityContent: { flexGrow: 1, justifyContent: 'center', padding: 22, gap: 24 },
+  prayerScroll: { flex: 1 },
   identityChoice: { flexDirection: 'row-reverse', alignItems: 'center', minHeight: 66, borderRadius: 16, backgroundColor: '#F8FBFF', borderWidth: 1, borderColor: '#E2ECF8', paddingHorizontal: 16, marginTop: 12 },
   identityEmoji: { color: BLUE, fontSize: 20, marginLeft: 12 },
   identityText: { color: NAVY, fontSize: 18, fontWeight: '800', flex: 1, textAlign: 'right' },
@@ -489,7 +747,7 @@ const styles = StyleSheet.create({
   prayerTitle: { color: NAVY, fontSize: 25, fontWeight: '900', textAlign: 'center' },
   prayerRule: { width: 54, height: 3, borderRadius: 3, backgroundColor: BLUE, alignSelf: 'center', marginVertical: 17 },
   prayerText: { color: '#253552', fontSize: 17, lineHeight: 33, textAlign: 'right', writingDirection: 'rtl' },
-  prayerActions: { gap: 4 },
+  prayerActions: { gap: 4, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 8, backgroundColor: '#F7FAFF' },
   textButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   textButtonLabel: { color: MUTED, fontSize: 13, fontWeight: '700' },
   settingsContent: { padding: 18, paddingBottom: 34 },

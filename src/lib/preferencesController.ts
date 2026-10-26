@@ -26,10 +26,12 @@ export function createPreferencesController(initial: Preferences, persist: (pref
       const requested = applyPreferencePatch(previous, patch);
       const requestVersion = ++version;
       current = requested;
+
       const write = queue.then(() => persist(requested));
       queue = write.then(() => {
         persisted = requested;
       }, () => undefined);
+
       return write.then(
         () => ({ ok: true, previous, requested, current }),
         () => {

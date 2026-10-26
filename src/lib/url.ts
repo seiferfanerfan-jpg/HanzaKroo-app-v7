@@ -18,30 +18,16 @@ export function normalizePlatformUrl(input: string): { value?: string; error?: s
   return { value: parsed.toString() };
 }
 
-export function isWebScheme(url: string): boolean {
-  if (url === 'about:blank') return true;
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'https:' && !parsed.username && !parsed.password && !!parsed.hostname;
-  } catch {
-    return false;
-  }
-}
-
 export function originOf(url: string): string | null {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || !parsed.hostname) return null;
+    if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password) return null;
     return parsed.origin;
   } catch {
     return null;
   }
 }
 
-export function hostOf(url: string): string | null {
-  try {
-    return new URL(url).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
+export function isWebScheme(url: string): boolean {
+  return url === 'about:blank' || originOf(url) !== null;
 }

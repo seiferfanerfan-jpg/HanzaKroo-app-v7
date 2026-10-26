@@ -18,9 +18,11 @@ type WelcomeDependencies = {
 
 export function createWelcomePoster(dependencies: WelcomeDependencies): () => Promise<WelcomeResult> {
   let postedThisRun = false;
+
   return async () => {
     if (postedThisRun) return 'already-posted';
     if (dependencies.platform !== 'android' && dependencies.platform !== 'ios') return 'unsupported';
+
     try {
       if (dependencies.platform === 'android') await dependencies.ensureChannel();
       let permission = await dependencies.getPermission();
@@ -28,6 +30,7 @@ export function createWelcomePoster(dependencies: WelcomeDependencies): () => Pr
         permission = await dependencies.requestPermission();
       }
       if (!permission.granted) return 'denied';
+
       await dependencies.schedule();
       postedThisRun = true;
       return 'posted';
