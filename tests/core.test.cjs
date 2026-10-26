@@ -58,7 +58,7 @@ test('partial preference updates preserve unrelated values and enforce the same 
   assert.notEqual(next, current);
 });
 
-test('cold start route selects setup, identity, then prayer in order', () => {
+test('optional setup and prayer flow selects setup, identity, then prayer in order', () => {
   assert.equal(getStartupRoute({ platformUrl: null, identity: null }), '/setup');
   assert.equal(getStartupRoute({ platformUrl: 'https://study.example/', identity: null }), '/identity');
   assert.equal(getStartupRoute({ platformUrl: 'https://study.example/', identity: 'saif' }), '/prayer');

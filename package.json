@@ -41,7 +41,7 @@
     "eas:configure": "pnpm dlx eas-cli@latest project:init",
     "eas:build:apk": "pnpm dlx eas-cli@latest build --platform android --profile apk",
     "eas:build:apk:ci": "pnpm dlx eas-cli@latest build --platform android --profile apk --non-interactive --wait",
-    "test:core": "rm -rf .test-dist && tsc -p tsconfig.test.json && node --test tests/core.test.cjs"
+    "test:core": "rm -rf .test-dist && tsc -p tsconfig.test.json && node --test tests/*.test.cjs"
   },
   "private": true
 }

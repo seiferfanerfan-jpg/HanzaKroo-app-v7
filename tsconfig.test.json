@@ -10,6 +10,7 @@
   },
   "include": [
     "src/data/prayers.ts",
+    "src/data/portals.ts",
     "src/lib/url.ts",
     "src/lib/preferencesModel.ts",
     "src/lib/preferencesController.ts",

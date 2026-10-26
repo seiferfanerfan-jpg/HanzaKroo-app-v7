@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type Ref } from 'react';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Speech from 'expo-speech';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -26,7 +26,9 @@ import { WebView as RawWebView } from 'react-native-webview';
 import type { WebViewProps } from 'react-native-webview/lib/WebView';
 import type { WebViewErrorEvent, WebViewHttpErrorEvent, WebViewMessageEvent, WebViewNavigation, WebViewOpenWindowEvent } from 'react-native-webview/lib/WebViewTypes';
 import { PRAYERS, type Identity } from './src/data/prayers';
+import { PORTALS } from './src/data/portals';
 import { isWebScheme, normalizePlatformUrl, originOf } from './src/lib/url';
+import { getStartupRoute } from './src/lib/startupRoute';
 import { useAppState } from './src/lib/appState';
 import { createSpeechBridge } from './src/lib/webSpeechBridge';
 import { makePageEvent, type BridgeMessage } from './src/lib/webEvents';
@@ -35,7 +37,6 @@ const BLUE = '#1479F8';
 const NAVY = '#14254A';
 const MUTED = '#71809A';
 const PALE = '#F2F7FF';
-const START_URL = 'https://haneenstudy-tu9hntzp.manus.space/baccalaureate';
 type WebViewHandle = {
   goBack(): void;
   reload(): void;
@@ -51,6 +52,11 @@ type RecognitionSession = { id: string; phase: 'authorizing' | 'active' | 'stopp
 function samePageUrl(first: string, second: string): boolean {
   try { return new URL(first).href === new URL(second).href; }
   catch { return first === second; }
+}
+
+function platformNameForUrl(url: string | null): string {
+  if (!url) return 'لم تُختر منصة بعد';
+  return PORTALS.find((portal) => portal.url === url)?.title ?? 'منصة مخصصة';
 }
 
 type Screen = 'setup' | 'identity' | 'prayer' | 'platform' | 'settings';
@@ -77,9 +83,8 @@ export function ActionButton({ title, onPress, secondary = false, disabled = fal
 
 export function AppScreen({ screen }: { screen: Screen }) {
   const router = useRouter();
-  const params = useLocalSearchParams<{ from?: string }>();
   const { prefs, patchPrefs, notificationStatus, activeUrl, setActiveUrl, rollbackUrl, setRollbackUrl } = useAppState();
-  const [urlInput, setUrlInput] = useState(prefs.platformUrl || START_URL);
+  const [urlInput, setUrlInput] = useState('');
   const [urlError, setUrlError] = useState('');
   const [typedText, setTypedText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -112,10 +117,6 @@ export function AppScreen({ screen }: { screen: Screen }) {
     if (!url) return;
     currentWebUrlRef.current = url;
   }, []);
-
-  useEffect(() => {
-    if (screen === 'settings') setUrlInput(prefs.platformUrl || START_URL);
-  }, [screen, prefs.platformUrl]);
 
   useEffect(() => {
     if (screen !== 'prayer' || !prayer) return;
@@ -293,42 +294,6 @@ export function AppScreen({ screen }: { screen: Screen }) {
     }
   };
 
-  const saveSettingsUrl = async (applyNow: boolean) => {
-    if (urlSavingRef.current) return;
-    const result = normalizePlatformUrl(urlInput);
-    if (!result.value) {
-      setUrlError(result.error || 'تحقق من الرابط.');
-      return;
-    }
-    const oldUrl = prefs.platformUrl;
-    setUrlError('');
-    urlSavingRef.current = true;
-    setUrlSaving(true);
-    try {
-      setUrlInput(result.value);
-      if (applyNow) {
-        const changed = oldUrl !== result.value;
-        pendingApplyUrlRef.current = changed ? result.value : null;
-        httpFailureRef.current = false;
-        setRollbackUrl(changed ? oldUrl : null);
-        setActiveUrl(result.value);
-        if (params.from === 'platform') router.back();
-        else router.replace('/platform');
-        return;
-      }
-
-      pendingApplyUrlRef.current = null;
-      const saved = await patchPrefs({ platformUrl: result.value });
-      if (!saved) return;
-      if (oldUrl && oldUrl !== result.value) {
-        Alert.alert('تم حفظ الرابط', 'سيُستخدم الرابط الجديد عند فتح المنصة لاحقًا.');
-      }
-    } finally {
-      urlSavingRef.current = false;
-      setUrlSaving(false);
-    }
-  };
-
   const selectIdentity = async (identity: Identity) => {
     if (identitySavingRef.current) return;
     identitySavingRef.current = true;
@@ -479,23 +444,21 @@ export function AppScreen({ screen }: { screen: Screen }) {
     router.push('/platform');
   };
 
-  const openSettings = (from: 'platform' | 'prayer') => {
-    router.push({ pathname: '/settings', params: { from } });
-  };
+  const openSettings = () => router.push('/settings');
 
-  const renderUrlForm = (settings = false) => (
+  const renderUrlForm = () => (
     <KeyboardAvoidingView style={styles.formFlex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.formContent} keyboardShouldPersistTaps="handled">
         <Brand />
         <View style={styles.card}>
-          <Text style={styles.eyebrow}>{settings ? 'إعدادات المنصة' : 'الإعداد الأول'}</Text>
-          <Text style={styles.heading}>{settings ? 'رابط مذاكرتك' : 'أهلًا بيك في هنذاكروا'}</Text>
-          <Text style={styles.body}>{settings ? 'عدّل رابط المنصة. هويتك وباقي تفضيلاتك هتفضل محفوظة.' : 'احفظ رابط منصتك التعليمية مرة واحدة، وهتلاقيها جاهزة في كل مرة.'}</Text>
+          <Text style={styles.eyebrow}>إعداد اختياري</Text>
+          <Text style={styles.heading}>أهلًا بيك في هنذاكروا</Text>
+          <Text style={styles.body}>لو عندك منصة مخصصة، تقدر تكتب عنوانها هنا. أو ارجع للشاشة الرئيسية واختار Portal أو V1.</Text>
           <Text style={styles.fieldLabel}>رابط المنصة (HTTPS)</Text>
           <TextInput
             value={urlInput}
             onChangeText={(value) => { setUrlInput(value); setUrlError(''); }}
-            placeholder={START_URL}
+            placeholder="https://…"
             placeholderTextColor="#9AA7BB"
             autoCapitalize="none"
             autoCorrect={false}
@@ -505,17 +468,15 @@ export function AppScreen({ screen }: { screen: Screen }) {
             accessibilityLabel="رابط المنصة التعليمية"
           />
           {!!urlError && <Text style={styles.errorText}>{urlError}</Text>}
-          <ActionButton title={settings ? 'حفظ الرابط' : 'حفظ ومتابعة'} disabled={urlSaving} onPress={() => settings ? saveSettingsUrl(false) : saveInitialUrl()} />
-          {settings && <ActionButton title="تطبيق الآن" secondary disabled={urlSaving} onPress={() => saveSettingsUrl(true)} />}
-          {settings && <ActionButton title="رجوع" secondary onPress={() => router.back()} />}
-          {!settings && <Text style={styles.hint}>الرابط الافتراضي مقترح ويمكنك تغييره قبل الحفظ.</Text>}
+          <ActionButton title="حفظ ومتابعة" disabled={urlSaving} onPress={saveInitialUrl} />
+          <Text style={styles.hint}>الاختيار بين Portal وV1 متاح دائمًا من الشاشة الرئيسية.</Text>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 
   if (screen === 'setup') {
-    return <View style={styles.page}><StatusBar style="dark" />{renderUrlForm(false)}</View>;
+    return <View style={styles.page}><StatusBar style="dark" />{renderUrlForm()}</View>;
   }
 
   if (screen === 'identity') {
@@ -527,7 +488,7 @@ export function AppScreen({ screen }: { screen: Screen }) {
           <View style={styles.card}>
             <Text style={styles.eyebrow}>خطوة واحدة ونبدأ</Text>
             <Text style={styles.heading}>أنت مين؟</Text>
-            <Text style={styles.body}>اختار هويتك عشان يظهر دعاءك في بداية كل تشغيل.</Text>
+            <Text style={styles.body}>اختار هويتك عشان يظهر دعاءك في مسار الدعاء قبل المنصة.</Text>
             <Pressable accessibilityRole="button" accessibilityLabel="اختيار هوية سيف" accessibilityState={{ selected: prefs.identity === 'saif', disabled: identitySaving }} disabled={identitySaving} style={styles.identityChoice} onPress={() => selectIdentity('saif')}><Text style={styles.identityEmoji}>✦</Text><Text style={styles.identityText}>سيف</Text><Text style={styles.choiceArrow}>‹</Text></Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="اختيار هوية حنون" accessibilityState={{ selected: prefs.identity === 'hanoun', disabled: identitySaving }} disabled={identitySaving} style={styles.identityChoice} onPress={() => selectIdentity('hanoun')}><Text style={styles.identityEmoji}>✦</Text><Text style={styles.identityText}>حنون</Text><Text style={styles.choiceArrow}>‹</Text></Pressable>
           </View>
@@ -555,7 +516,7 @@ export function AppScreen({ screen }: { screen: Screen }) {
         <View style={styles.prayerActions}>
           {isTyping && <ActionButton title="تخطي الكتابة" secondary onPress={completeText} />}
           {!isTyping && <ActionButton title="التالي — افتح المنصة" onPress={openSavedSite} />}
-          <Pressable accessibilityRole="button" accessibilityLabel="فتح الإعدادات" onPress={() => openSettings('prayer')} style={styles.textButton}><Text style={styles.textButtonLabel}>الإعدادات</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="فتح الإعدادات" onPress={openSettings} style={styles.textButton}><Text style={styles.textButtonLabel}>الإعدادات</Text></Pressable>
         </View>
       </View>
     );
@@ -570,11 +531,9 @@ export function AppScreen({ screen }: { screen: Screen }) {
           <Text style={styles.heading}>إعدادات التطبيق</Text>
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>المنصة</Text>
-            <Text selectable style={styles.currentUrl} numberOfLines={2}>{prefs.platformUrl || 'لا يوجد رابط محفوظ'}</Text>
-            <TextInput value={urlInput} onChangeText={(value) => { setUrlInput(value); setUrlError(''); }} placeholder="https://…" autoCapitalize="none" autoCorrect={false} keyboardType="url" textAlign="left" style={styles.input} />
-            {!!urlError && <Text style={styles.errorText}>{urlError}</Text>}
-            <ActionButton title="حفظ الرابط" disabled={urlSaving} onPress={() => saveSettingsUrl(false)} />
-            <ActionButton title="تطبيق الرابط الآن" secondary disabled={urlSaving} onPress={() => saveSettingsUrl(true)} />
+            <Text style={styles.body}>المنصة المختارة: {platformNameForUrl(prefs.platformUrl)}</Text>
+            <Text style={styles.hint}>يمكنك التبديل بين البوابتين من شاشة الترحيب.</Text>
+            <ActionButton title="اختيار منصة أخرى" secondary onPress={() => router.navigate('/')} />
           </View>
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>الهوية</Text>
@@ -583,6 +542,7 @@ export function AppScreen({ screen }: { screen: Screen }) {
               <ActionButton title="سيف" secondary onPress={() => { void patchPrefs({ identity: 'saif' }); }} />
               <ActionButton title="حنون" secondary onPress={() => { void patchPrefs({ identity: 'hanoun' }); }} />
             </View>
+            <ActionButton title="ابدأ بالدعاء قبل المنصة" secondary onPress={() => router.push(getStartupRoute(prefs))} />
           </View>
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>الإشعارات</Text>
@@ -614,7 +574,8 @@ export function AppScreen({ screen }: { screen: Screen }) {
       <View style={styles.webHeader}>
         <Brand compact />
         <View style={styles.webHeaderActions}>
-          <Pressable style={styles.headerButton} accessibilityLabel="إعدادات" onPress={() => openSettings('platform')}><Text style={styles.headerButtonText}>الإعدادات</Text></Pressable>
+          <Pressable style={styles.headerButton} accessibilityLabel="العودة إلى اختيار المنصة" onPress={() => router.navigate('/')}><Text style={styles.headerButtonText}>الرئيسية</Text></Pressable>
+          <Pressable style={styles.headerButton} accessibilityLabel="إعدادات" onPress={openSettings}><Text style={styles.headerButtonText}>الإعدادات</Text></Pressable>
           <Pressable style={styles.headerButton} accessibilityLabel="إظهار أو إخفاء الأدوات" onPress={() => setShowToolbar((value) => !value)}><Text style={styles.headerButtonText}>{showToolbar ? 'إخفاء' : 'أدوات'}</Text></Pressable>
         </View>
       </View>
@@ -698,12 +659,12 @@ export function AppScreen({ screen }: { screen: Screen }) {
           }}
         />
         {webLoading && <View pointerEvents="none" style={styles.loadingOverlay}><ActivityIndicator size="small" color={BLUE} /><Text style={styles.loadingLabel}>جارٍ فتح المنصة…</Text></View>}
-        {!!webError && <View style={styles.webError}><View style={styles.errorCard}><Text style={styles.errorTitle}>ما قدرنا نفتح المنصة</Text><Text style={styles.body}>{webError}</Text><ActionButton title="إعادة المحاولة" onPress={() => { httpFailureRef.current = false; setWebError(''); webRef.current?.reload(); }} />{rollbackUrl && <ActionButton title="الرجوع للرابط السابق" secondary onPress={() => { const oldUrl = rollbackUrl; pendingApplyUrlRef.current = null; httpFailureRef.current = false; setRollbackUrl(null); setActiveUrl(oldUrl); setUrlInput(oldUrl); recordCurrentWebUrl(oldUrl); webSourceUrlRef.current = oldUrl; setWebSourceUrl(oldUrl); setCanGoBack(false); setWebError(''); }} />}<ActionButton title="الإعدادات" secondary onPress={() => openSettings('platform')} /></View></View>}
+        {!!webError && <View style={styles.webError}><View style={styles.errorCard}><Text style={styles.errorTitle}>ما قدرنا نفتح المنصة</Text><Text style={styles.body}>{webError}</Text><ActionButton title="إعادة المحاولة" onPress={() => { httpFailureRef.current = false; setWebError(''); webRef.current?.reload(); }} />{rollbackUrl && <ActionButton title="الرجوع للرابط السابق" secondary onPress={() => { const oldUrl = rollbackUrl; pendingApplyUrlRef.current = null; httpFailureRef.current = false; setRollbackUrl(null); setActiveUrl(oldUrl); setUrlInput(oldUrl); recordCurrentWebUrl(oldUrl); webSourceUrlRef.current = oldUrl; setWebSourceUrl(oldUrl); setCanGoBack(false); setWebError(''); }} />}<ActionButton title="الإعدادات" secondary onPress={openSettings} /></View></View>}
       </View>
       {showToolbar && <View style={styles.toolbar}>
         <Pressable style={styles.toolButton} onPress={() => canGoBack ? webRef.current?.goBack() : router.back()}><Text style={styles.toolIcon}>‹</Text><Text style={styles.toolLabel}>رجوع</Text></Pressable>
         <Pressable style={styles.toolButton} onPress={() => { setWebError(''); webRef.current?.reload(); }}><Text style={styles.toolIcon}>↻</Text><Text style={styles.toolLabel}>تحديث</Text></Pressable>
-        <Pressable style={styles.toolButton} onPress={() => openSettings('platform')}><Text style={styles.toolIcon}>⚙</Text><Text style={styles.toolLabel}>الإعدادات</Text></Pressable>
+        <Pressable style={styles.toolButton} onPress={openSettings}><Text style={styles.toolIcon}>⚙</Text><Text style={styles.toolLabel}>الإعدادات</Text></Pressable>
       </View>}
     </View>
   );
@@ -755,7 +716,6 @@ const styles = StyleSheet.create({
   closeButton: { paddingHorizontal: 15, paddingVertical: 10, borderRadius: 12, backgroundColor: PALE },
   closeButtonText: { color: NAVY, fontWeight: '700' },
   sectionTitle: { color: NAVY, fontSize: 17, fontWeight: '900', textAlign: 'right', marginBottom: 12 },
-  currentUrl: { color: MUTED, fontSize: 12, textAlign: 'left', marginBottom: 12 },
   inlineActions: { flexDirection: 'row', gap: 10 },
   settingRow: { flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', minHeight: 42 },
   speedControl: { flexDirection: 'row', alignItems: 'center', gap: 12 },
