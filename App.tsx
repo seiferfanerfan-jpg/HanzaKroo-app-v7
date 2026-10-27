@@ -3,6 +3,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Speech from 'expo-speech';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import * as NavigationBar from 'expo-navigation-bar';
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import * as Notifications from 'expo-notifications';
 import {
@@ -183,8 +184,14 @@ export function AppScreen({ screen }: { screen: Screen }) {
   useFocusEffect(useCallback(() => {
     if (screen !== 'platform') return;
     platformFocusedRef.current = true;
+    if (Platform.OS === 'android') {
+      void NavigationBar.setVisibilityAsync('hidden').catch(() => undefined);
+    }
     return () => {
       platformFocusedRef.current = false;
+      if (Platform.OS === 'android') {
+        void NavigationBar.setVisibilityAsync('visible').catch(() => undefined);
+      }
       if (fullscreenActiveRef.current) {
         fullscreenActiveRef.current = false;
         void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => undefined);
@@ -585,6 +592,8 @@ export function AppScreen({ screen }: { screen: Screen }) {
           allowsInlineMediaPlayback
           allowsFullscreenVideo
           mediaPlaybackRequiresUserAction
+          setBuiltInZoomControls={false}
+          setDisplayZoomControls={false}
           setSupportMultipleWindows={false}
           mixedContentMode="never"
           originWhitelist={['https://*', 'about:blank']}
