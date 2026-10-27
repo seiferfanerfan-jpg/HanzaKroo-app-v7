@@ -11,7 +11,7 @@ export const PORTALS = [
     title: 'هنذاكروا V1',
     description: 'الإصدار الأول من المنصة',
     marker: 'V1',
-    url: 'https://hanzakro-2026-10-26-v1.vercel.app/',
+    url: 'https://hanzakro.hanzakro-v1.workers.dev',
   },
 ] as const;
 

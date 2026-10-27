@@ -435,14 +435,7 @@ export function AppScreen({ screen }: { screen: Screen }) {
     }
   };
 
-  const openSavedSite = () => {
-    if (!prefs.platformUrl) {
-      router.replace('/setup');
-      return;
-    }
-    setActiveUrl(prefs.platformUrl);
-    router.push('/platform');
-  };
+  const goToPortalSelection = () => router.replace('/welcome');
 
   const openSettings = () => router.push('/settings');
 
@@ -515,7 +508,7 @@ export function AppScreen({ screen }: { screen: Screen }) {
         </ScrollView>
         <View style={styles.prayerActions}>
           {isTyping && <ActionButton title="تخطي الكتابة" secondary onPress={completeText} />}
-          {!isTyping && <ActionButton title="التالي — افتح المنصة" onPress={openSavedSite} />}
+          {!isTyping && <ActionButton title="التالي — اختيار المنصة" onPress={goToPortalSelection} />}
           <Pressable accessibilityRole="button" accessibilityLabel="فتح الإعدادات" onPress={openSettings} style={styles.textButton}><Text style={styles.textButtonLabel}>الإعدادات</Text></Pressable>
         </View>
       </View>
@@ -533,7 +526,7 @@ export function AppScreen({ screen }: { screen: Screen }) {
             <Text style={styles.sectionTitle}>المنصة</Text>
             <Text style={styles.body}>المنصة المختارة: {platformNameForUrl(prefs.platformUrl)}</Text>
             <Text style={styles.hint}>يمكنك التبديل بين البوابتين من شاشة الترحيب.</Text>
-            <ActionButton title="اختيار منصة أخرى" secondary onPress={() => router.navigate('/')} />
+            <ActionButton title="اختيار منصة أخرى" secondary onPress={() => router.navigate('/welcome')} />
           </View>
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>الهوية</Text>
@@ -574,7 +567,7 @@ export function AppScreen({ screen }: { screen: Screen }) {
       <View style={styles.webHeader}>
         <Brand compact />
         <View style={styles.webHeaderActions}>
-          <Pressable style={styles.headerButton} accessibilityLabel="العودة إلى اختيار المنصة" onPress={() => router.navigate('/')}><Text style={styles.headerButtonText}>الرئيسية</Text></Pressable>
+          <Pressable style={styles.headerButton} accessibilityLabel="العودة إلى اختيار المنصة" onPress={() => router.navigate('/welcome')}><Text style={styles.headerButtonText}>الرئيسية</Text></Pressable>
           <Pressable style={styles.headerButton} accessibilityLabel="إعدادات" onPress={openSettings}><Text style={styles.headerButtonText}>الإعدادات</Text></Pressable>
           <Pressable style={styles.headerButton} accessibilityLabel="إظهار أو إخفاء الأدوات" onPress={() => setShowToolbar((value) => !value)}><Text style={styles.headerButtonText}>{showToolbar ? 'إخفاء' : 'أدوات'}</Text></Pressable>
         </View>

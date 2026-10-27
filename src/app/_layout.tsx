@@ -6,6 +6,7 @@ export default function RootLayout() {
     <AppStateProvider>
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#F7FAFF' } }}>
         <Stack.Screen name="index" />
+        <Stack.Screen name="welcome" />
         <Stack.Screen name="setup" />
         <Stack.Screen name="identity" />
         <Stack.Screen name="prayer" />
