@@ -5,8 +5,20 @@ import {
   requestPermissionsAsync,
   scheduleNotificationAsync,
   setNotificationChannelAsync,
+  setNotificationHandler,
 } from 'expo-notifications';
 import { createWelcomePoster } from './welcomeNotificationCore';
+
+export const WELCOME_NOTIFICATION_BODY = 'أهلا وسهلا ي حنونتي ده سيستم كامل عشان نجيب 91٪ مع بعض';
+
+setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 const ensureWelcomeChannel = async () => {
   if (Platform.OS !== 'android') return;
@@ -27,7 +39,7 @@ export const postWelcomeOnce = createWelcomePoster({
     await scheduleNotificationAsync({
       content: {
         title: 'هنذاكروا',
-        body: 'أهلًا وسهلًا بأبطال هنذاكروا... ده سيستم كامل في خدمتكم 😉، عشان تجيبوا 91٪ فيما أعلى، متنسوش تقرؤوا الدعاء وتسمّوا الله... وربنا يوفقكم ويجوّزكم بعض 😂♥️',
+        body: WELCOME_NOTIFICATION_BODY,
         sound: true,
         ...(Platform.OS === 'android' ? { channelId: 'welcome' } : {}),
       },

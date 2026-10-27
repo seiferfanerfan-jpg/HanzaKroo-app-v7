@@ -29,3 +29,20 @@ test('welcome screen renders only portal choices without raw website addresses',
   assert.ok(app.includes('title="التالي — اختيار المنصة" onPress={goToPortalSelection}'));
   assert.match(fs.readFileSync('src/app/_layout.tsx', 'utf8'), /name="welcome"/);
 });
+
+test('welcome notification uses the requested Arabic message and shows while the app is open', () => {
+  const source = fs.readFileSync('src/lib/welcomeNotification.ts', 'utf8');
+  assert.match(source, /أهلا وسهلا ي حنونتي ده سيستم كامل عشان نجيب 91٪ مع بعض/);
+  assert.match(source, /shouldShowBanner:\s*true/);
+  assert.match(source, /trigger:\s*null/);
+});
+
+test('Web Speech API bridge exposes both synthesis and recognition adapters', () => {
+  const source = fs.readFileSync('src/lib/webSpeechBridge.ts', 'utf8');
+  assert.match(source, /SpeechSynthesisUtterance/);
+  assert.match(source, /window\.speechSynthesis/);
+  assert.match(source, /window\.SpeechRecognition=Recognition/);
+  assert.match(source, /window\.webkitSpeechRecognition=Recognition/);
+  assert.match(fs.readFileSync('App.tsx', 'utf8'), /case 'tts_speak'/);
+  assert.match(fs.readFileSync('App.tsx', 'utf8'), /case 'recognition_start'/);
+});
